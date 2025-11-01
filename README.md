@@ -5,7 +5,7 @@ Painel web e API para análise de contratos com upload, biblioteca, visualizaç�
 ## Estrutura
 
 - `app/`: Frontend em React (Vite) com Tailwind e shadcn-like components.
-- `api/`: Backend Node/Express integrado ao Supabase (Postgres + Storage).
+- `api/`: Backend Node/Express integrado ao Supabase (Postgres + Storage) com ORM Prisma.
 
 ## Requisitos
 
@@ -21,16 +21,22 @@ cd api && npm install
 cd ../app && npm install
 ```
 
-2. Configure variáveis de ambiente copiando `api/.env.example` para `.env` e preenchendo credenciais Supabase.
-3. Em `app/.env`, defina `VITE_API_BASE` apontando para o backend (ex: `http://localhost:5175/api`).
-4. Rode o backend:
+2. Configure variáveis de ambiente copiando `api/.env.example` para `.env` e preenchendo credenciais Supabase (incluindo `SUPABASE_DB_URL`).
+3. Em `api/`, gere o cliente Prisma (necessário sempre que alterar o schema):
+
+```bash
+npm run prisma:generate
+```
+
+4. Em `app/.env`, defina `VITE_API_BASE` apontando para o backend (ex: `http://localhost:5175/api`).
+5. Rode o backend:
 
 ```bash
 cd api
 npm run dev
 ```
 
-5. Rode o frontend:
+6. Rode o frontend:
 
 ```bash
 cd app

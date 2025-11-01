@@ -1,0 +1,111 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("SUPABASE_DB_URL")
+}
+
+model Plan {
+  id         String   @id
+  dailyLimit Int      @map("daily_limit")
+  apiKeys    ApiKey[]
+
+  @@map("plans")
+}
+
+model ApiKey {
+  apiKey     String      @id @map("api_key")
+  plan       String
+  usageToday Int         @default(0) @map("usage_today")
+  resetAt    DateTime    @default(dbgenerated("(now()::date + interval '1 day')")) @map("reset_at")
+  planRef    Plan        @relation(fields: [plan], references: [id])
+  collections Collection[]
+  tags        Tag[]
+  documents   Document[]
+  usageLogs   UsageLog[]
+
+  @@map("api_keys")
+}
+
+model Collection {
+  id        String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  ownerKey  String     @map("owner_key")
+  name      String
+  color     String?
+  createdAt DateTime   @default(now()) @map("created_at")
+  owner     ApiKey     @relation(fields: [ownerKey], references: [apiKey])
+  documents Document[]
+
+  @@map("collections")
+}
+
+model Tag {
+  id        String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  ownerKey  String        @map("owner_key")
+  name      String
+  color     String?
+  createdAt DateTime      @default(now()) @map("created_at")
+  owner     ApiKey        @relation(fields: [ownerKey], references: [apiKey])
+  documents DocumentTag[]
+
+  @@unique([ownerKey, name])
+  @@map("tags")
+}
+
+model Document {
+  id           String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  ownerKey     String         @map("owner_key")
+  collectionId String?        @map("collection_id") @db.Uuid
+  filename     String
+  mimeType     String?        @map("mime_type")
+  pages        Int?
+  sizeBytes    BigInt?        @map("size_bytes")
+  status       String         @default("processed")
+  createdAt    DateTime       @default(now()) @map("created_at")
+  deletedAt    DateTime?      @map("deleted_at")
+  storagePath  String?        @map("storage_path")
+  owner        ApiKey         @relation(fields: [ownerKey], references: [apiKey])
+  collection   Collection?    @relation(fields: [collectionId], references: [id])
+  documentTags DocumentTag[]
+  analyses     Analysis[]
+
+  @@index([ownerKey, createdAt], map: "idx_documents_owner_created")
+  @@index([collectionId], map: "idx_documents_collection")
+  @@map("documents")
+}
+
+model DocumentTag {
+  documentId String   @map("document_id") @db.Uuid
+  tagId      String   @map("tag_id") @db.Uuid
+  document   Document @relation(fields: [documentId], references: [id])
+  tag        Tag      @relation(fields: [tagId], references: [id])
+
+  @@id([documentId, tagId])
+  @@map("document_tags")
+}
+
+model Analysis {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  documentId String   @map("document_id") @db.Uuid
+  summary    String?
+  issues     Json?
+  deadlines  Json?
+  createdAt  DateTime @default(now()) @map("created_at")
+  document   Document @relation(fields: [documentId], references: [id])
+
+  @@index([documentId], map: "idx_analyses_doc")
+  @@map("analyses")
+}
+
+model UsageLog {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  apiKey    String   @map("api_key")
+  endpoint  String
+  status    Int
+  createdAt DateTime @default(now()) @map("created_at")
+  apiKeyRef ApiKey   @relation(fields: [apiKey], references: [apiKey])
+
+  @@map("usage_logs")
+}

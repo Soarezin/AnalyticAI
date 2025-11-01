@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { supabaseAdmin } from "../services/db/supabase.js";
+import { prisma } from "../services/db/prismaClient.js";
 import { listDocuments, getDocumentWithAnalysis } from "../services/db/documentsRepo.js";
 import { getPublicUrl } from "../services/storage/supabase.js";
 
@@ -53,11 +53,16 @@ router.get("/:id", async (req, res, next) => {
 router.delete("/:id", async (req, res, next) => {
   try {
     const { apiKey } = req.context;
-    await supabaseAdmin
-      .from("documents")
-      .update({ deleted_at: new Date().toISOString() })
-      .eq("id", req.params.id)
-      .eq("owner_key", apiKey);
+    const document = await prisma.document.findFirst({ where: { id: req.params.id, ownerKey: apiKey } });
+    if (!document) {
+      return res.status(404).json({ error: "Not found" });
+    }
+
+    await prisma.document.update({
+      where: { id: document.id },
+      data: { deletedAt: new Date() }
+    });
+
     res.json({ ok: true });
   } catch (error) {
     next(error);
@@ -68,11 +73,17 @@ router.post("/:id/move", async (req, res, next) => {
   try {
     const { apiKey } = req.context;
     const { collectionId = null } = req.body ?? {};
-    await supabaseAdmin
-      .from("documents")
-      .update({ collection_id: collectionId })
-      .eq("id", req.params.id)
-      .eq("owner_key", apiKey);
+
+    const document = await prisma.document.findFirst({ where: { id: req.params.id, ownerKey: apiKey } });
+    if (!document) {
+      return res.status(404).json({ error: "Not found" });
+    }
+
+    await prisma.document.update({
+      where: { id: document.id },
+      data: { collectionId: collectionId || null }
+    });
+
     res.json({ ok: true });
   } catch (error) {
     next(error);
@@ -83,11 +94,19 @@ router.post("/:id/tags", async (req, res, next) => {
   try {
     const { apiKey } = req.context;
     const { tagIds = [] } = req.body ?? {};
-    await supabaseAdmin.from("document_tags").delete().eq("document_id", req.params.id);
-    if (tagIds.length) {
-      const relations = tagIds.map((tagId) => ({ document_id: req.params.id, tag_id: tagId }));
-      await supabaseAdmin.from("document_tags").insert(relations);
+
+    const document = await prisma.document.findFirst({ where: { id: req.params.id, ownerKey: apiKey } });
+    if (!document) {
+      return res.status(404).json({ error: "Not found" });
     }
+
+    await prisma.documentTag.deleteMany({ where: { documentId: document.id } });
+
+    if (tagIds.length) {
+      const relations = tagIds.map((tagId) => ({ documentId: document.id, tagId }));
+      await prisma.documentTag.createMany({ data: relations, skipDuplicates: true });
+    }
+
     res.json({ ok: true });
   } catch (error) {
     next(error);

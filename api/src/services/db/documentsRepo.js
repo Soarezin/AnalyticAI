@@ -1,96 +1,132 @@
-import { supabaseAdmin } from "./supabase.js";
+import { prisma } from "./prismaClient.js";
+
+const orderMap = {
+  created_desc: { createdAt: "desc" },
+  created_asc: { createdAt: "asc" },
+  alpha_asc: { filename: "asc" },
+  alpha_desc: { filename: "desc" }
+};
 
 export async function listDocuments({ ownerKey, query, collectionId, tagIds, page = 1, pageSize = 12, order = "created_desc" }) {
-  let docIdsFilter = null;
-  if (tagIds?.length) {
-    const { data: docTags } = await supabaseAdmin
-      .from("document_tags")
-      .select("document_id")
-      .in("tag_id", tagIds);
-    docIdsFilter = [...new Set(docTags?.map((item) => item.document_id))];
-    if (!docIdsFilter.length) {
-      return { items: [], total: 0, page, pageSize };
+  const filters = {
+    ownerKey,
+    deletedAt: null
+  };
+
+  if (collectionId) {
+    filters.collectionId = collectionId;
+  }
+
+  if (Array.isArray(tagIds) && tagIds.length) {
+    filters.documentTags = {
+      some: {
+        tagId: { in: tagIds }
+      }
+    };
+  }
+
+  if (query) {
+    const contains = query.trim();
+    if (contains) {
+      filters.OR = [
+        { filename: { contains, mode: "insensitive" } },
+        {
+          analyses: {
+            some: {
+              summary: {
+                contains,
+                mode: "insensitive"
+              }
+            }
+          }
+        }
+      ];
     }
   }
 
-  const from = supabaseAdmin
-    .from("documents")
-    .select(
-      `id, filename, pages, size_bytes, status, created_at, storage_path, collection:collection_id(id, name, color), document_tags(tag_id, tags(id, name, color)), analyses(summary)`,
-      { count: "exact" }
-    )
-    .eq("owner_key", ownerKey)
-    .is("deleted_at", null)
-    .order("created_at", { referencedTable: "analyses", ascending: false })
-    .range((page - 1) * pageSize, page * pageSize - 1);
+  const [total, documents] = await prisma.$transaction([
+    prisma.document.count({ where: filters }),
+    prisma.document.findMany({
+      where: filters,
+      orderBy: orderMap[order] ?? orderMap.created_desc,
+      skip: Math.max(page - 1, 0) * pageSize,
+      take: pageSize,
+      include: {
+        collection: true,
+        documentTags: { include: { tag: true } },
+        analyses: {
+          orderBy: { createdAt: "desc" },
+          take: 1
+        }
+      }
+    })
+  ]);
 
-  if (query) {
-    const sanitized = `%${query}%`;
-    from.or(`filename.ilike.${sanitized},analyses.summary.ilike.${sanitized}`);
-  }
-  if (collectionId) {
-    from.eq("collection_id", collectionId);
-  }
-  if (docIdsFilter) {
-    from.in("id", docIdsFilter);
-  }
-
-  const orderMap = {
-    created_desc: { column: "created_at", ascending: false },
-    created_asc: { column: "created_at", ascending: true },
-    alpha_asc: { column: "filename", ascending: true },
-    alpha_desc: { column: "filename", ascending: false }
-  };
-  const { column, ascending } = orderMap[order] ?? orderMap.created_desc;
-  from.order(column, { ascending });
-
-  const { data, error, count } = await from;
-  if (error) throw error;
-  const items = data.map((doc) => ({
+  const items = documents.map((doc) => ({
     id: doc.id,
     filename: doc.filename,
-    pages: doc.pages,
-    size_bytes: doc.size_bytes,
+    pages: doc.pages ?? null,
+    size_bytes: doc.sizeBytes != null ? Number(doc.sizeBytes) : null,
     status: doc.status,
-    created_at: doc.created_at,
-    collection: doc.collection,
-    tags: doc.document_tags?.map((item) => item.tags) ?? [],
-    lastAnalysisSummary: doc.analyses?.[0]?.summary ?? null
+    created_at: doc.createdAt,
+    collection: doc.collection
+      ? {
+          id: doc.collection.id,
+          name: doc.collection.name,
+          color: doc.collection.color
+        }
+      : null,
+    tags: doc.documentTags.map(({ tag }) => ({ id: tag.id, name: tag.name, color: tag.color })),
+    lastAnalysisSummary: doc.analyses[0]?.summary ?? null
   }));
 
   return {
     items,
-    total: count ?? items.length,
+    total,
     page,
     pageSize
   };
 }
 
 export async function getDocumentWithAnalysis({ ownerKey, documentId }) {
-  const { data, error } = await supabaseAdmin
-    .from("documents")
-    .select(
-      `id, filename, pages, size_bytes, status, created_at, storage_path, collection:collection_id(id, name, color), document_tags(tag_id, tags(id, name, color)), analyses(id, summary, issues, deadlines, created_at)`
-    )
-    .eq("id", documentId)
-    .eq("owner_key", ownerKey)
-    .order("created_at", { referencedTable: "analyses", ascending: false })
-    .maybeSingle();
-  if (error) throw error;
-  if (!data) return null;
+  const document = await prisma.document.findFirst({
+    where: { id: documentId, ownerKey, deletedAt: null },
+    include: {
+      collection: true,
+      documentTags: { include: { tag: true } },
+      analyses: {
+        orderBy: { createdAt: "desc" },
+        take: 1
+      }
+    }
+  });
 
-  const latestAnalysis = data.analyses?.[0] ?? null;
+  if (!document) {
+    return null;
+  }
+
+  const latestAnalysis = document.analyses[0] ?? null;
 
   return {
-    id: data.id,
-    filename: data.filename,
-    pages: data.pages,
-    size_bytes: data.size_bytes,
-    status: data.status,
-    created_at: data.created_at,
-    storage_path: data.storage_path,
-    collection: data.collection,
-    tags: data.document_tags?.map((item) => item.tags) ?? [],
+    id: document.id,
+    filename: document.filename,
+    pages: document.pages ?? null,
+    size_bytes: document.sizeBytes != null ? Number(document.sizeBytes) : null,
+    status: document.status,
+    created_at: document.createdAt,
+    storage_path: document.storagePath,
+    collection: document.collection
+      ? { id: document.collection.id, name: document.collection.name, color: document.collection.color }
+      : null,
+    tags: document.documentTags.map(({ tag }) => ({ id: tag.id, name: tag.name, color: tag.color })),
     analysis: latestAnalysis
+      ? {
+          id: latestAnalysis.id,
+          summary: latestAnalysis.summary,
+          issues: latestAnalysis.issues,
+          deadlines: latestAnalysis.deadlines,
+          created_at: latestAnalysis.createdAt
+        }
+      : null
   };
 }

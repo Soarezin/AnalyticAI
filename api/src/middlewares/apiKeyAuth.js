@@ -16,7 +16,7 @@ export default async function apiKeyAuth(req, res, next) {
       apiKey,
       plan: metadata.plan,
       dailyLimit: plans[metadata.plan]?.dailyLimit ?? 10,
-      usageToday: metadata.usage_today ?? 0
+      usageToday: metadata.usageToday ?? 0
     };
     next();
   } catch (error) {

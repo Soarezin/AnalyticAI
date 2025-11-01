@@ -5,7 +5,7 @@ import { summarizeText } from "../services/nlp/summarize.js";
 import { extractIssues } from "../services/nlp/extractIssues.js";
 import { extractDeadlines } from "../services/nlp/extractDeadlines.js";
 import { uploadPdf, getPublicUrl } from "../services/storage/supabase.js";
-import { supabaseAdmin } from "../services/db/supabase.js";
+import { prisma } from "../services/db/prismaClient.js";
 
 const router = Router();
 
@@ -22,19 +22,16 @@ router.post("/", async (req, res, next) => {
     const documentId = randomUUID();
     const ownerKey = req.context.apiKey;
 
-    const { error: insertError } = await supabaseAdmin
-      .from("documents")
-      .insert({
+    await prisma.document.create({
+      data: {
         id: documentId,
-        owner_key: ownerKey,
+        ownerKey,
         filename,
         status: "processing",
-        collection_id: collectionId,
-        size_bytes: buffer.byteLength
-      })
-      .select()
-      .maybeSingle();
-    if (insertError) throw insertError;
+        collectionId: collectionId || null,
+        sizeBytes: BigInt(buffer.byteLength)
+      }
+    });
 
     await uploadPdf({ ownerKey, documentId, buffer });
 
@@ -46,26 +43,29 @@ router.post("/", async (req, res, next) => {
 
     const analysisPayload = {
       id: randomUUID(),
-      document_id: documentId,
+      documentId,
       summary,
       issues,
       deadlines
     };
 
-    const { error: analysisError } = await supabaseAdmin.from("analyses").insert(analysisPayload);
-    if (analysisError) throw analysisError;
+    await prisma.analysis.create({ data: analysisPayload });
 
     const storagePath = `${ownerKey}/${documentId}.pdf`;
 
-    await supabaseAdmin
-      .from("documents")
-      .update({ status: "processed", pages, storage_path: storagePath })
-      .eq("id", documentId);
+    await prisma.document.update({
+      where: { id: documentId },
+      data: {
+        status: "processed",
+        pages,
+        storagePath
+      }
+    });
 
     if (tagIds?.length) {
-      await supabaseAdmin.from("document_tags").delete().eq("document_id", documentId);
-      const relations = tagIds.map((tagId) => ({ document_id: documentId, tag_id: tagId }));
-      await supabaseAdmin.from("document_tags").insert(relations);
+      await prisma.documentTag.deleteMany({ where: { documentId } });
+      const relations = tagIds.map((tagId) => ({ documentId, tagId }));
+      await prisma.documentTag.createMany({ data: relations, skipDuplicates: true });
     }
 
     const publicUrl = getPublicUrl(storagePath);
